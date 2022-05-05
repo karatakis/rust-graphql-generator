@@ -1,5 +1,5 @@
-// use proc_macro2::TokenStream;
 use heck::{ToUpperCamelCase};
+use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use rust_graphql_generator_demo::{
     database_schema::get_database_schema, toml_generator::write_toml, column_mapping::column_mapping,
@@ -31,9 +31,16 @@ async fn main() {
         .output()
         .unwrap();
 
+
+    // TODO receive it as parameter value
     let connection = SqlitePool::connect("sqlite://chinook.db").await.unwrap();
 
     let database_schema = get_database_schema(connection).await.unwrap();
+
+
+    // TODO utilize sea_orm_codegen::EntityWriter <3
+
+    let mut single_queries: Vec<TokenStream> = Vec::new();
 
     let table_definitions: Vec<_> = database_schema
         .tables
@@ -42,8 +49,8 @@ async fn main() {
         .map(|table| {
             let table_meta: TableCreateStatement = table.write();
 
-            let ident = format_ident!("{}", table.name);
-            let name = format_ident!("{}", table.name.to_upper_camel_case());
+            let table_name = format_ident!("{}", table.name);
+            let struct_name = format_ident!("{}", table.name.to_upper_camel_case());
 
             let getters: Vec<_> = table_meta
                 .get_columns()
@@ -53,29 +60,22 @@ async fn main() {
                 })
                 .collect();
 
+            single_queries.push(quote!{
+                async fn #table_name<'a>(&self, ctx: &Context<'a>) -> Vec<#struct_name> {
+                    use generated::orm::#table_name::Entity;
+                    let db: &DatabaseConnection = ctx.data::<DatabaseConnection>().unwrap();
+                    let data: Vec<#struct_name> = Entity::find().all(db).await.unwrap().into_iter().map(|v| #struct_name(v)).collect();
+                    data
+                }
+            });
+
             quote! {
                 #[derive(Debug)]
-                struct #name (generated::orm::#ident::Model);
+                struct #struct_name (generated::orm::#table_name::Model);
 
                 #[async_graphql::Object]
-                impl #name {
+                impl #struct_name {
                     #(#getters)*
-                }
-            }
-        })
-        .collect();
-
-    let single_queries: Vec<_> = database_schema
-        .tables
-        .into_iter()
-        .map(|table| {
-            let table_name = format_ident!("{}", table.name);
-
-            let struct_name = format_ident!("{}", table.name.to_upper_camel_case());
-
-            quote!{
-                async fn #table_name(&self) -> Vec<#struct_name> {
-                    vec![]
                 }
             }
         })
@@ -84,11 +84,14 @@ async fn main() {
     let tokens = quote! {
         use async_graphql::{
             http::{playground_source, GraphQLPlaygroundConfig},
-            EmptyMutation, EmptySubscription, Schema,
+            Context, EmptyMutation, EmptySubscription, Schema,
         };
         use async_graphql_poem::GraphQL;
         use poem::{get, handler, listener::TcpListener, web::Html, IntoResponse, Route, Server};
-        use sea_orm::prelude::{DateTime, Decimal};
+        use sea_orm::{
+            prelude::{DateTime, Decimal},
+            Database, DatabaseConnection, EntityTrait,
+        };
 
         #(#table_definitions)*
 
@@ -106,8 +109,11 @@ async fn main() {
 
         #[tokio::main]
         async fn main() {
+            // TODO load from .env
+            let database = Database::connect("sqlite://../chinook.db").await.unwrap();
+
             let schema = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
-                // .data(StarWars::new())
+                .data(database)
                 .finish();
             let app = Route::new().at("/", get(graphql_playground).post(GraphQL::new(schema)));
             println!("Playground: http://localhost:8000");

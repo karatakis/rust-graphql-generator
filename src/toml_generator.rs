@@ -28,7 +28,7 @@ impl TomlStructure {
             "sea-orm".into(),
             DependencyInfo {
                 version: "0.7.0".into(),
-                features: None,
+                features: Some(vec!["sqlx-sqlite".into(), "runtime-async-std-native-tls".into()]),
             },
         );
         dependencies.insert(

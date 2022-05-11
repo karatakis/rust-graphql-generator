@@ -12,7 +12,7 @@ pub fn column_mapping (column: &ColumnDef) -> TokenStream {
 
   quote! {
     async fn #column_name(&self) -> &#column_type {
-      &self.0.#column_name
+      &self.#column_name
     }
   }
 }

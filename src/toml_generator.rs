@@ -28,7 +28,10 @@ impl TomlStructure {
             "sea-orm".into(),
             DependencyInfo {
                 version: "0.7.0".into(),
-                features: Some(vec!["sqlx-sqlite".into(), "runtime-async-std-native-tls".into()]),
+                features: Some(vec![
+                    "sqlx-sqlite".into(),
+                    "runtime-async-std-native-tls".into(),
+                ]),
             },
         );
         dependencies.insert(
@@ -67,12 +70,13 @@ impl TomlStructure {
     }
 }
 
-pub fn write_toml(path: &String, name: &String) {
+// TODO options sqlite, mysql, pgsql
+pub fn write_toml(project_path: &std::path::Path, name: &String) -> std::io::Result<()> {
+    let file_path = project_path.join("Cargo.toml");
+
     let data = TomlStructure::new(name.clone());
 
-    fs::write(
-        format!("{}/Cargo.toml", path),
-        toml::to_string_pretty(&data).unwrap(),
-    )
-    .unwrap();
+    fs::write(file_path, toml::to_string_pretty(&data).unwrap())?;
+
+    Ok(())
 }

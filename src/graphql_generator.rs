@@ -6,6 +6,45 @@ use std::{collections::HashMap, fs};
 
 use sea_orm_codegen::Column;
 
+fn generate_generic_input_type_filter() -> TokenStream {
+    quote! {
+        #[derive(async_graphql::InputObject, Debug)]
+        #[graphql(concrete(name = "StringFilter", params(String)))]
+        #[graphql(concrete(name = "TinyIntegerFilter", params(i8)))]
+        #[graphql(concrete(name = "SmallIntegerFilter", params(i16)))]
+        #[graphql(concrete(name = "IntegerFilter", params(i32)))]
+        #[graphql(concrete(name = "BigIntegerFilter", params(i64)))]
+        #[graphql(concrete(name = "TinyUnsignedFilter", params(u8)))]
+        #[graphql(concrete(name = "SmallUnsignedFilter", params(u16)))]
+        #[graphql(concrete(name = "UnsignedFilter", params(u32)))]
+        #[graphql(concrete(name = "BigUnsignedFilter", params(u64)))]
+        #[graphql(concrete(name = "FloatFilter", params(f32)))]
+        #[graphql(concrete(name = "DoubleFilter", params(f64)))]
+        // TODO #[graphql(concrete(name = "JsonFilter", params()))]
+        // TODO #[graphql(concrete(name = "DateFilter", params()))]
+        // TODO #[graphql(concrete(name = "TimeFilter", params()))]
+        #[graphql(concrete(name = "DateTimeFilter", params(DateTime)))]
+        // TODO #[graphql(concrete(name = "TimestampFilter", params()))]
+        // TODO #[graphql(concrete(name = "TimestampWithTimeZoneFilter", params()))]
+        #[graphql(concrete(name = "DecimalFilter", params(Decimal)))]
+        // TODO #[graphql(concrete(name = "UuidFilter", params(uuid::Uuid)))]
+        // TODO #[graphql(concrete(name = "BinaryFilter", params()))]
+        #[graphql(concrete(name = "BooleanFilter", params(bool)))]
+        // TODO #[graphql(concrete(name = "EnumFilter", params()))]
+        pub struct TypeFilter<T: async_graphql::InputType> {
+            pub eq: Option<T>,
+            pub ne: Option<T>,
+            pub gt: Option<T>,
+            pub gte: Option<T>,
+            pub lt: Option<T>,
+            pub lte: Option<T>,
+            pub is_in: Option<Vec<T>>,
+            pub is_not_in: Option<Vec<T>>,
+            pub is_null: Option<bool>,
+        }
+    }
+}
+
 fn generate_graphql_entities(
     dir: &std::path::Path,
     crate_stmts_map: HashMap<String, TableCreateStatement>,
@@ -18,7 +57,6 @@ fn generate_graphql_entities(
             let filter_name = format_ident!("{}Filter", name.to_upper_camel_case());
 
             let mut filters: Vec<TokenStream> = Vec::new();
-            let mut filter_names: Vec<TokenStream> = Vec::new();
 
             let getters: Vec<_> = table_meta
                 .clone()
@@ -29,27 +67,23 @@ fn generate_graphql_entities(
                     let column: Column = Column::from(column);
 
                     let column_name = column.get_name_snake_case();
-                    let column_type = column.get_rs_type();
+                    let column_type: TokenStream = column.get_rs_type();
 
-                    let column_filter_name = format_ident!("{}{}Filter", struct_name, column.get_name_camel_case());
+                    // used to convert Option<T> -> T
+                    let filter_column_type: proc_macro2::TokenTree = column_type.clone().into_iter().find(|token: &proc_macro2::TokenTree| {
+                        if let proc_macro2::TokenTree::Ident(ident) = token {
+                            if ident.eq("Option") {
+                                false
+                            } else {
+                                true
+                            }
+                        } else {
+                            false
+                        }
+                    }).unwrap();
 
                     filters.push(quote!{
-                        #[derive(async_graphql::InputObject, Debug)]
-                        pub struct #column_filter_name {
-                            pub eq: Option<#column_type>,
-                            pub ne: Option<#column_type>,
-                            pub gt: Option<#column_type>,
-                            pub gte: Option<#column_type>,
-                            pub lt: Option<#column_type>,
-                            pub lte: Option<#column_type>,
-                            pub is_in: Option<Vec<#column_type>>,
-                            pub is_not_in: Option<Vec<#column_type>>,
-                            pub is_null: Option<bool>,
-                        }
-                    });
-
-                    filter_names.push(quote!{
-                        pub #column_name: Option<#column_filter_name>
+                        pub #column_name: Option<TypeFilter<#filter_column_type>>
                     });
 
                     quote! {
@@ -68,20 +102,22 @@ fn generate_graphql_entities(
                     #(#getters)*
                 }
 
-                #(#filters)*
-
                 #[derive(async_graphql::InputObject, Debug)]
                 pub struct #filter_name {
                     pub or: Option<Vec<Box<#filter_name>>>,
                     pub and: Option<Vec<Box<#filter_name>>>,
-                    #(#filter_names),*
+                    #(#filters),*
                 }
             }
         })
         .collect();
 
+    let generic_input_type_filter = generate_generic_input_type_filter();
+
     let tokens = quote! {
         use sea_orm::prelude::{DateTime, Decimal};
+
+        #generic_input_type_filter
 
         #(#graphql_entities)*
     };

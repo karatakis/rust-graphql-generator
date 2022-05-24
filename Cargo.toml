@@ -12,10 +12,8 @@ proc-macro2 = "1.0.37"
 toml = "0.5.9"
 serde = "1.0.137"
 serde_derive = "1.0.137"
-sea-orm-codegen = "0.7.0"
-
-[dependencies.sea-orm]
-version = '0.7.0'
+sea-orm-codegen = "0.8.0"
+sea-query = "0.24.6"
 
 [dependencies.tokio]
 version = "1.17.0"
@@ -26,6 +24,6 @@ version = "0.5.13"
 features = ["runtime-async-std-native-tls", "sqlite"]
 
 [dependencies.sea-schema]
-version = "0.7.1"
+version = "0.8"
 default-features = false
 features = ["discovery", "debug-print", "sqlx-sqlite", "runtime-async-std-native-tls"]

@@ -38,7 +38,7 @@ impl TomlStructure {
             "async-graphql".into(),
             DependencyInfo {
                 version: "3.0.38".into(),
-                features: Some(vec!["decimal".into(), "chrono".into()]),
+                features: Some(vec!["decimal".into(), "chrono".into(), "dataloader".into()]),
             },
         );
         dependencies.insert(
@@ -59,6 +59,31 @@ impl TomlStructure {
             "poem".into(),
             DependencyInfo {
                 version: "1.3.29".into(),
+                features: None,
+            },
+        );
+
+
+        dependencies.insert(
+            "async-trait".into(),
+            DependencyInfo {
+                version: "0.1.53".into(),
+                features: None,
+            },
+        );
+
+        dependencies.insert(
+            "tracing".into(),
+            DependencyInfo {
+                version: "0.1.34".into(),
+                features: None,
+            },
+        );
+
+        dependencies.insert(
+            "tracing-subscriber".into(),
+            DependencyInfo {
+                version: "0.3.11".into(),
                 features: None,
             },
         );

@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use sea_orm_codegen::Column;
-use sea_schema::sea_query::ColumnDef;
+use sea_query::table::ColumnDef;
 
 pub fn column_mapping(column: &ColumnDef) -> TokenStream {
     let column: Column = Column::from(column);

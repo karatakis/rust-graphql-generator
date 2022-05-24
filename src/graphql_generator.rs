@@ -1,10 +1,7 @@
-use heck::{ToSnakeCase, ToUpperCamelCase};
-use proc_macro2::{TokenStream, Ident};
+use proc_macro2::{TokenStream};
 use quote::{format_ident, quote};
-use sea_schema::sea_query::table::TableCreateStatement;
-use std::{collections::HashMap, fs};
-
-use sea_orm_codegen::Column;
+use std::{fs};
+use crate::types::{TableMeta, ColumnMeta};
 
 fn generate_generic_input_type_filter() -> TokenStream {
     quote! {
@@ -47,44 +44,34 @@ fn generate_generic_input_type_filter() -> TokenStream {
 
 fn generate_graphql_entities(
     dir: &std::path::Path,
-    crate_stmts_map: HashMap<String, TableCreateStatement>,
+    tables_meta: &Vec<TableMeta>,
 ) {
-    let graphql_entities: Vec<TokenStream> = crate_stmts_map
+    let graphql_entities: Vec<TokenStream> = tables_meta
         .iter()
-        .map(|(name, table_meta)| {
-            let table_name = format_ident!("{}", name.to_snake_case());
-            let struct_name = format_ident!("{}", name.to_upper_camel_case());
-            let filter_name = format_ident!("{}Filter", name.to_upper_camel_case());
+        .map(|table: &TableMeta| {
+            let entity_module = format_ident!("{}", table.entity_module);
+            let entity_name = format_ident!("{}", table.entity_name);
+            let entity_filter = format_ident!("{}", table.entity_filter);
 
-            let mut filters: Vec<TokenStream> = Vec::new();
+            let filters: Vec<TokenStream> = table
+                .columns
+                .iter()
+                .map(|column: &ColumnMeta| {
+                    let column_name = format_ident!("{}", column.column_name);
+                    let column_filter_type = column.column_filter_type.clone();
 
-            let getters: Vec<_> = table_meta
-                .clone()
-                .get_columns()
-                .into_iter()
-                .map(|column| {
-                    // let specs = column.get_column_spec();
-                    let column: Column = Column::from(column);
+                    quote!{
+                        pub #column_name: Option<TypeFilter<#column_filter_type>>
+                    }
+                })
+                .collect();
 
-                    let column_name = column.get_name_snake_case();
-                    let column_type: TokenStream = column.get_rs_type();
-
-                    // used to convert Option<T> -> T
-                    let filter_column_type: proc_macro2::TokenTree = column_type.clone().into_iter().find(|token: &proc_macro2::TokenTree| {
-                        if let proc_macro2::TokenTree::Ident(ident) = token {
-                            if ident.eq("Option") {
-                                false
-                            } else {
-                                true
-                            }
-                        } else {
-                            false
-                        }
-                    }).unwrap();
-
-                    filters.push(quote!{
-                        pub #column_name: Option<TypeFilter<#filter_column_type>>
-                    });
+            let getters: Vec<TokenStream> = table
+                .columns
+                .iter()
+                .map(|column: &ColumnMeta| {
+                    let column_name = format_ident!("{}", column.column_name);
+                    let column_type = column.column_type.clone();
 
                     quote! {
                         pub async fn #column_name(&self) -> &#column_type {
@@ -95,17 +82,17 @@ fn generate_graphql_entities(
                 .collect();
 
             quote! {
-                use crate::orm::#table_name::Model as #struct_name;
+                use crate::orm::#entity_module::Model as #entity_name;
 
                 #[async_graphql::Object]
-                impl #struct_name {
+                impl #entity_name {
                     #(#getters)*
                 }
 
                 #[derive(async_graphql::InputObject, Debug)]
-                pub struct #filter_name {
-                    pub or: Option<Vec<Box<#filter_name>>>,
-                    pub and: Option<Vec<Box<#filter_name>>>,
+                pub struct #entity_filter {
+                    pub or: Option<Vec<Box<#entity_filter>>>,
+                    pub and: Option<Vec<Box<#entity_filter>>>,
                     #(#filters),*
                 }
             }
@@ -125,23 +112,25 @@ fn generate_graphql_entities(
     fs::write(dir.join("entities.rs"), tokens.to_string()).unwrap();
 }
 
-fn generate_filter_recursive(table_name: &Ident, filter_name: &Ident, meta: &TableCreateStatement) -> TokenStream {
+fn generate_filter_recursive(table: &TableMeta) -> TokenStream {
+    let entity_module = format_ident!("{}", table.entity_module);
+    let entity_filter = format_ident!("{}", table.entity_filter);
 
-    let columns_filters: Vec<TokenStream> = meta
-        .get_columns()
-        .into_iter()
-        .map(|column| {
-            let column_name = format_ident!("{}", column.get_column_name().to_snake_case());
-            let column_upper_name = format_ident!("{}", column.get_column_name().to_upper_camel_case());
+    let columns_filters: Vec<TokenStream> = table
+        .columns
+        .iter()
+        .map(|column: &ColumnMeta| {
+            let column_name = format_ident!("{}", column.column_name);
+            let column_enum_name = format_ident!("{}", column.column_enum_name);
 
             quote! {
                 if let Some(#column_name) = current_filter.#column_name {
                     if let Some(eq_value) = #column_name.eq {
-                        condition = condition.add(orm::#table_name::Column::#column_upper_name.eq(eq_value))
+                        condition = condition.add(orm::#entity_module::Column::#column_enum_name.eq(eq_value))
                     }
 
                     if let Some(ne_value) = #column_name.ne {
-                        condition = condition.add(orm::#table_name::Column::#column_upper_name.ne(ne_value))
+                        condition = condition.add(orm::#entity_module::Column::#column_enum_name.ne(ne_value))
                     }
                 }
             }
@@ -149,7 +138,7 @@ fn generate_filter_recursive(table_name: &Ident, filter_name: &Ident, meta: &Tab
         .collect();
 
     quote! {
-        fn filter_recursive(root_filter: Option<entities::#filter_name>) -> sea_orm::Condition {
+        fn filter_recursive(root_filter: Option<entities::#entity_filter>) -> sea_orm::Condition {
             let mut condition = sea_orm::Condition::all();
 
             if let Some(current_filter) = root_filter {
@@ -181,7 +170,10 @@ fn generate_filter_recursive(table_name: &Ident, filter_name: &Ident, meta: &Tab
     }
 }
 
-fn generate_root(dir: &std::path::Path, crate_stmts_map: HashMap<String, TableCreateStatement>) {
+fn generate_root(
+    dir: &std::path::Path,
+    tables_meta: &Vec<TableMeta>,
+) {
     let mod_tokens = quote! {
         pub mod entities;
 
@@ -191,23 +183,23 @@ fn generate_root(dir: &std::path::Path, crate_stmts_map: HashMap<String, TableCr
     };
     fs::write(dir.join("mod.rs"), mod_tokens.to_string()).unwrap();
 
-    let single_queries: Vec<TokenStream> = crate_stmts_map
+    let single_queries: Vec<TokenStream> = tables_meta
         .iter()
-        .map(|(name, table_meta)| {
-            let table_name = format_ident!("{}", name.to_snake_case());
-            let filter_name = format_ident!("{}Filter", name.to_upper_camel_case());
+        .map(|table: &TableMeta| {
+            let entity_module = format_ident!("{}", table.entity_module);
+            let entity_filter = format_ident!("{}", table.entity_filter);
 
-            let filter_recursive = generate_filter_recursive(&table_name, &filter_name, &table_meta);
+            let filter_recursive = generate_filter_recursive(table);
 
             quote! {
-                async fn #table_name<'a>(&self, ctx: &Context<'a>, filters: Option<entities::#filter_name>) -> Vec<orm::#table_name::Model> {
+                async fn #entity_module<'a>(&self, ctx: &Context<'a>, filters: Option<entities::#entity_filter>) -> Vec<orm::#entity_module::Model> {
                     println!("filters: {:?}", filters);
 
                     #filter_recursive
 
                     let db: &DatabaseConnection = ctx.data::<DatabaseConnection>().unwrap();
 
-                    let data: Vec<orm::#table_name::Model> = orm::#table_name::Entity::find()
+                    let data: Vec<orm::#entity_module::Model> = orm::#entity_module::Entity::find()
                         .filter(filter_recursive(filters))
                         .all(db).await.unwrap();
 
@@ -238,8 +230,8 @@ fn generate_root(dir: &std::path::Path, crate_stmts_map: HashMap<String, TableCr
 
 pub fn generate_graphql(
     dir: &std::path::Path,
-    crate_stmts_map: HashMap<String, TableCreateStatement>,
+    tables_meta: Vec<TableMeta>,
 ) {
-    generate_graphql_entities(dir, crate_stmts_map.clone());
-    generate_root(dir, crate_stmts_map);
+    generate_graphql_entities(dir, &tables_meta);
+    generate_root(dir, &tables_meta);
 }

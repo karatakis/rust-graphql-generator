@@ -1,11 +1,11 @@
 use quote::{format_ident, quote};
 use rust_graphql_generator_demo::{
     database_schema::get_database_schema, entities_generator::generate_entities,
-    graphql_generator::generate_graphql, toml_generator::write_toml,
+    graphql_generator::generate_graphql, toml_generator::write_toml, types::TableMeta
 };
 use sea_schema::sea_query::table::TableCreateStatement;
 use sqlx::SqlitePool;
-use std::{collections::HashMap, env, fs, path, process};
+use std::{env, fs, path, process};
 
 #[tokio::main]
 async fn main() {
@@ -18,18 +18,9 @@ async fn main() {
 
     let connection = SqlitePool::connect("sqlite://chinook.db").await.unwrap();
 
-    let database_schema = get_database_schema(connection).await.unwrap();
-
-    let mut crate_stmts_map: HashMap<String, TableCreateStatement> = HashMap::new();
-
-    for table in database_schema.tables.into_iter() {
-        crate_stmts_map.insert(table.name.clone(), table.write());
-    }
+    let (tables_meta, table_create_stmts): (Vec<TableMeta>, Vec<TableCreateStatement>) = get_database_schema(connection).await;
 
     {
-        let table_create_stmts: Vec<TableCreateStatement> =
-            crate_stmts_map.values().cloned().collect();
-
         let folder: String = format!("{}/src/orm", project_name).into();
         let dir = path::Path::new(&folder);
         fs::create_dir_all(dir).unwrap();
@@ -42,7 +33,7 @@ async fn main() {
         let folder: String = format!("{}/src/graphql", project_name).into();
         let dir = path::Path::new(&folder);
         fs::create_dir_all(dir).unwrap();
-        generate_graphql(dir, crate_stmts_map);
+        generate_graphql(dir, tables_meta);
     }
 
     let lib_tokens = quote! {
@@ -76,6 +67,11 @@ async fn main() {
 
         #[tokio::main]
         async fn main() {
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_test_writer()
+                .init();
+
             let database = Database::connect("sqlite://../chinook.db").await.unwrap();
             let schema = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
                 .data(database)

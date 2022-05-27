@@ -1,5 +1,6 @@
 use crate::types::{ColumnMeta, ForeignKeyMeta, TableMeta};
 use heck::{ToSnakeCase, ToUpperCamelCase};
+use proc_macro2::TokenStream;
 use sea_orm_codegen::Column;
 use sea_query::{
     ColumnDef, ColumnSpec, ForeignKeyCreateStatement, TableCreateStatement, TableForeignKey,
@@ -7,7 +8,6 @@ use sea_query::{
 use sea_schema::sqlite::def::{Schema, TableDef};
 use sea_schema::sqlite::discovery::SchemaDiscovery;
 use sqlx::{Pool, Sqlite};
-use proc_macro2::TokenStream;
 
 pub async fn get_database_schema(
     connection: Pool<Sqlite>,
@@ -23,16 +23,12 @@ pub async fn get_database_schema(
         .map(|table: &TableDef| {
             let table_create_stmt = table.write();
 
-            let table_name = table.name.to_upper_camel_case();
-            let table_module = table.name.to_snake_case();
-            let table_filter = format!("{}Filter", table_name);
-
             let foreign_keys: Vec<(String, ForeignKeyMeta)> = table_create_stmt
                 .get_foreign_key_create_stmts()
                 .iter()
                 .map(|fk: &ForeignKeyCreateStatement| fk.get_foreign_key())
                 .map(|fk: &TableForeignKey| {
-                    let foreign_key =  parse_table_fk(fk, &table_create_stmt);
+                    let foreign_key = parse_table_fk(&table.name, fk, &table_create_stmt, true);
 
                     (
                         fk.get_ref_table().unwrap().to_upper_camel_case(),
@@ -62,7 +58,9 @@ pub async fn get_database_schema(
                 .get_foreign_key_create_stmts()
                 .iter()
                 .map(|fk: &ForeignKeyCreateStatement| fk.get_foreign_key())
-                .map(|fk: &TableForeignKey| parse_table_fk(fk, &table_create_stmt))
+                .map(|fk: &TableForeignKey| {
+                    parse_table_fk(&table.name, fk, &table_create_stmt, false)
+                })
                 .collect();
 
             let reverse_fks: Vec<ForeignKeyMeta> = reverse_foreign_keys
@@ -117,7 +115,6 @@ pub async fn get_database_schema(
 
             TableMeta {
                 entity_name,
-                entity_filter: format!("{}Filter", table.name.to_upper_camel_case()),
                 entity_module: table.name.to_snake_case(),
                 columns,
                 foreign_keys,
@@ -131,41 +128,46 @@ pub async fn get_database_schema(
     (tables_meta, tables_create_stmts)
 }
 
-fn parse_table_fk (fk: &TableForeignKey, table_create_stmt: &sea_query::TableCreateStatement) -> ForeignKeyMeta {
-    let table_name = fk.get_ref_table().unwrap().to_upper_camel_case();
-        let table_module = fk.get_ref_table().unwrap().to_snake_case();
-        let table_filter = format!("{}Filter", table_name);
+fn parse_table_fk(
+    table_name: &String,
+    fk: &TableForeignKey,
+    table_create_stmt: &sea_query::TableCreateStatement,
+    reverse: bool,
+) -> ForeignKeyMeta {
+    let table_name = if reverse {
+        table_name.clone()
+    } else {
+        fk.get_ref_table().unwrap().to_upper_camel_case()
+    };
+    let table_module = table_name.to_snake_case();
 
-        // TODO if column_types not needed remove
-        let column_types: Vec<_> = fk
-            .get_columns()
-            .iter()
-            .map(|name| {
-                Column::from(
-                    table_create_stmt
-                        .get_columns()
-                        .into_iter()
-                        .find(|column: &&ColumnDef| column.get_column_name().eq(name))
-                        .unwrap(),
-                )
-            })
-            .map(|column_info: Column| column_info.get_rs_type())
-            .collect();
+    // TODO if column_types not needed remove
+    let column_types: Vec<_> = fk
+        .get_columns()
+        .iter()
+        .map(|name| {
+            Column::from(
+                table_create_stmt
+                    .get_columns()
+                    .into_iter()
+                    .find(|column: &&ColumnDef| column.get_column_name().eq(name))
+                    .unwrap(),
+            )
+        })
+        .map(|column_info: Column| column_info.get_rs_type())
+        .collect();
 
-        let optional_relation = column_types
-            .iter()
-            .any(|column_type: &TokenStream|{
-                column_type.to_string().starts_with("Option")
-            });
+    let optional_relation = column_types
+        .iter()
+        .any(|column_type: &TokenStream| column_type.to_string().starts_with("Option"));
 
-        ForeignKeyMeta {
-            ref_columns: fk.get_ref_columns(),
-            columns: fk.get_columns(),
-            table_name,
-            table_module,
-            table_filter,
-            column_types: column_types,
-            many_relation: false,
-            optional_relation
-        }
+    ForeignKeyMeta {
+        ref_columns: if reverse { fk.get_columns() } else { fk.get_ref_columns()},
+        columns: if reverse { fk.get_ref_columns() } else { fk.get_columns()},
+        table_name,
+        table_module,
+        column_types: column_types,
+        many_relation: reverse,
+        optional_relation,
+    }
 }

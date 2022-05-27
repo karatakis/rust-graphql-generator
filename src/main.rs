@@ -1,7 +1,7 @@
 use quote::{format_ident, quote};
 use rust_graphql_generator_demo::{
     database_schema::get_database_schema, entities_generator::generate_entities,
-    graphql_generator::generate_graphql, toml_generator::write_toml, types::TableMeta
+    graphql::write_graphql, toml_generator::write_toml, types::TableMeta
 };
 use sea_schema::sea_query::table::TableCreateStatement;
 use sqlx::SqlitePool;
@@ -30,10 +30,9 @@ async fn main() {
     write_toml(project_dir, &"generated".into()).unwrap();
 
     {
-        let folder: String = format!("{}/src/graphql", project_name).into();
-        let dir = path::Path::new(&folder);
-        fs::create_dir_all(dir).unwrap();
-        generate_graphql(dir, tables_meta);
+        let dir: String = format!("{}/src/graphql", project_name).into();
+        fs::create_dir_all(&dir).unwrap();
+        write_graphql(&dir, &tables_meta);
     }
 
     let lib_tokens = quote! {

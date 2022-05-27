@@ -7,7 +7,6 @@ pub struct ForeignKeyMeta {
     pub column_types: Vec<TokenStream>,
     pub table_name: String,   // CamelCase
     pub table_module: String, // snake_case
-    pub table_filter: String, // CamelCase + Filter
     pub many_relation: bool,
     pub optional_relation: bool,
 }

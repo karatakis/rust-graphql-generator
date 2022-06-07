@@ -16,32 +16,25 @@ pub async fn get_database_schema(
 
     let schema: Schema = schema_discovery.discover().await.unwrap();
 
-    let reverse_foreign_keys: Vec<(String, ForeignKeyMeta)> = schema
+    let foreign_keys: Vec<ForeignKeyMeta> = schema
         .tables
         .clone()
         .iter()
         .map(|table: &TableDef| {
             let table_create_stmt = table.write();
 
-            let foreign_keys: Vec<(String, ForeignKeyMeta)> = table_create_stmt
+            let foreign_keys: Vec<ForeignKeyMeta> = table_create_stmt
                 .get_foreign_key_create_stmts()
                 .iter()
                 .map(|fk: &ForeignKeyCreateStatement| fk.get_foreign_key())
-                .map(|fk: &TableForeignKey| {
-                    let foreign_key = parse_table_fk(&table.name, fk, &table_create_stmt, true);
-
-                    (
-                        fk.get_ref_table().unwrap().to_upper_camel_case(),
-                        foreign_key,
-                    )
-                })
+                .map(|fk: &TableForeignKey| parse_table_fk(&table, &table_create_stmt, fk))
                 .collect();
 
             foreign_keys
         })
         .fold(
-            Vec::<(String, ForeignKeyMeta)>::new(),
-            |acc: Vec<(String, ForeignKeyMeta)>, cur: Vec<(String, ForeignKeyMeta)>| {
+            Vec::<ForeignKeyMeta>::new(),
+            |acc: Vec<ForeignKeyMeta>, cur: Vec<ForeignKeyMeta>| {
                 [acc, cur].concat()
             },
         );
@@ -54,22 +47,11 @@ pub async fn get_database_schema(
 
             let entity_name = table.name.to_upper_camel_case();
 
-            let foreign_keys: Vec<ForeignKeyMeta> = table_create_stmt
-                .get_foreign_key_create_stmts()
-                .iter()
-                .map(|fk: &ForeignKeyCreateStatement| fk.get_foreign_key())
-                .map(|fk: &TableForeignKey| {
-                    parse_table_fk(&table.name, fk, &table_create_stmt, false)
-                })
+            let foreign_keys: Vec<ForeignKeyMeta> = foreign_keys
+                .clone()
+                .into_iter()
+                .filter(|fk: &ForeignKeyMeta| fk.destination_table_name.eq(&entity_name) || fk.source_table_name.eq(&entity_name))
                 .collect();
-
-            let reverse_fks: Vec<ForeignKeyMeta> = reverse_foreign_keys
-                .iter()
-                .filter(|fk: &&(String, ForeignKeyMeta)| fk.0.eq(&entity_name))
-                .map(|fk: &(String, ForeignKeyMeta)| fk.1.clone())
-                .collect();
-
-            let foreign_keys = [foreign_keys, reverse_fks].concat();
 
             let columns: Vec<ColumnMeta> = table_create_stmt
                 .get_columns()
@@ -129,19 +111,16 @@ pub async fn get_database_schema(
 }
 
 fn parse_table_fk(
-    table_name: &String,
-    fk: &TableForeignKey,
+    table: &TableDef,
     table_create_stmt: &sea_query::TableCreateStatement,
-    reverse: bool,
+    fk: &TableForeignKey,
 ) -> ForeignKeyMeta {
-    let table_name = if reverse {
-        table_name.clone()
-    } else {
-        fk.get_ref_table().unwrap().to_upper_camel_case()
-    };
-    let table_module = table_name.to_snake_case();
+    let source_table_name = table.name.clone().to_upper_camel_case();
+    let source_table_module = source_table_name.to_snake_case();
 
-    // TODO if column_types not needed remove
+    let destination_table_name = fk.get_ref_table().unwrap().to_upper_camel_case();
+    let destination_table_module = destination_table_name.to_snake_case();
+
     let column_types: Vec<_> = fk
         .get_columns()
         .iter()
@@ -162,12 +141,16 @@ fn parse_table_fk(
         .any(|column_type: &TokenStream| column_type.to_string().starts_with("Option"));
 
     ForeignKeyMeta {
-        ref_columns: if reverse { fk.get_columns() } else { fk.get_ref_columns()},
-        columns: if reverse { fk.get_ref_columns() } else { fk.get_columns()},
-        table_name,
-        table_module,
-        column_types: column_types,
-        many_relation: reverse,
+        source_columns: fk.get_columns(),
+        destination_columns: fk.get_ref_columns(),
+        column_types,
+
+        source_table_name,
+        source_table_module,
+
+        destination_table_name,
+        destination_table_module,
+
         optional_relation,
     }
 }

@@ -2,21 +2,27 @@ use proc_macro2::TokenStream;
 
 #[derive(Clone)]
 pub struct ForeignKeyMeta {
-    pub columns: Vec<String>,     // Vec<CamelCase>
-    pub ref_columns: Vec<String>, // Vec<CamelCase>
+    pub source_columns: Vec<String>,     // Vec<CamelCase>
+    pub destination_columns: Vec<String>, // Vec<CamelCase>
+
     pub column_types: Vec<TokenStream>,
-    pub table_name: String,   // CamelCase
-    pub table_module: String, // snake_case
-    pub many_relation: bool,
+
+    pub source_table_name: String,   // CamelCase
+    pub source_table_module: String, // snake_case
+
+    pub destination_table_name: String,   // CamelCase
+    pub destination_table_module: String, // snake_case
+
     pub optional_relation: bool,
 }
 
 impl std::fmt::Debug for ForeignKeyMeta {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ForeignKeyMeta")
-        .field("table_name", &self.table_name)
-        .field("columns", &self.columns)
-        .field("many_relation", &self.many_relation)
+        .field("source_table_name", &self.source_table_name)
+        .field("source_columns", &self.source_columns)
+        .field("destination_table_name", &self.destination_table_name)
+        .field("destination_columns", &self.destination_columns)
         .field("optional_relation", &self.optional_relation)
         .finish()
     }

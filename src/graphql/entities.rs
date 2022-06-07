@@ -127,7 +127,7 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
                 quote! {
                     Vec<crate::orm::#destination_table_module::Model>
                 }
-            } else if fk.optional_relation {
+            } else if fk.is_optional(reverse) {
                 quote! {
                     Option<crate::orm::#destination_table_module::Model>
                 }
@@ -145,7 +145,7 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
                         .await
                         .unwrap();
                 }
-            } else if fk.optional_relation {
+            } else if fk.is_optional(reverse) {
                 quote! {
                     let data: #return_type = crate::orm::#destination_table_module::Entity::find()
                         .filter(filter)
@@ -192,17 +192,16 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
         .foreign_keys
         .iter()
         .map(|fk: &ForeignKeyMeta| {
-            let field_indexes: Vec<Literal> = (0..fk.column_types.clone().len()).map(|n| Literal::usize_unsuffixed(n)).collect();
+            let reverse = fk.is_reverse(&table.entity_name);
+
+            let field_indexes: Vec<Literal> = (0..fk.source_column_types.clone().len()).map(|n| Literal::usize_unsuffixed(n)).collect();
 
             let column_names: Vec<Ident> = fk.destination_columns.iter().map(|name| format_ident!("{}", name)).collect();
             let column_names_snake: Vec<Ident> = fk.destination_columns.iter().map(|name| format_ident!("{}", name.to_snake_case())).collect();
 
             let fk_name = format_ident!("{}{}FK", fk.source_table_name, fk.destination_table_name);
 
-            let reverse = fk.destination_table_name.eq(&table.entity_name);
-
-
-            let field_types = if reverse {&fk.column_types} else {&fk.column_types};
+            let field_types = if reverse {&fk.destination_column_types} else {&fk.source_column_types};
 
             let return_type: TokenStream = if reverse {
                 quote! {

@@ -1,6 +1,5 @@
 use crate::types::{ColumnMeta, ForeignKeyMeta, TableMeta};
 use heck::{ToSnakeCase, ToUpperCamelCase};
-use proc_macro2::TokenStream;
 use sea_orm_codegen::Column;
 use sea_query::{
     ColumnDef, ColumnSpec, ForeignKeyCreateStatement, TableCreateStatement, TableForeignKey,
@@ -16,6 +15,12 @@ pub async fn get_database_schema(
 
     let schema: Schema = schema_discovery.discover().await.unwrap();
 
+    let table_create_stmt_map : std::collections::HashMap<String, TableCreateStatement> = schema
+        .tables
+        .iter()
+        .map(|table: &TableDef| (table.name.clone(), table.write()))
+        .collect();
+
     let foreign_keys: Vec<ForeignKeyMeta> = schema
         .tables
         .clone()
@@ -27,7 +32,7 @@ pub async fn get_database_schema(
                 .get_foreign_key_create_stmts()
                 .iter()
                 .map(|fk: &ForeignKeyCreateStatement| fk.get_foreign_key())
-                .map(|fk: &TableForeignKey| parse_table_fk(&table, &table_create_stmt, fk))
+                .map(|fk: &TableForeignKey| parse_table_fk(&table, fk, &table_create_stmt_map))
                 .collect();
 
             foreign_keys
@@ -112,21 +117,20 @@ pub async fn get_database_schema(
 
 fn parse_table_fk(
     table: &TableDef,
-    table_create_stmt: &sea_query::TableCreateStatement,
     fk: &TableForeignKey,
+    table_create_stmt_map: &std::collections::HashMap<String, TableCreateStatement>,
 ) -> ForeignKeyMeta {
     let source_table_name = table.name.clone().to_upper_camel_case();
     let source_table_module = source_table_name.to_snake_case();
 
-    let destination_table_name = fk.get_ref_table().unwrap().to_upper_camel_case();
-    let destination_table_module = destination_table_name.to_snake_case();
+    let source_table_create_stmt = table_create_stmt_map.get(&source_table_module).unwrap();
 
-    let column_types: Vec<_> = fk
+    let source_column_types: Vec<_> = fk
         .get_columns()
         .iter()
         .map(|name| {
             Column::from(
-                table_create_stmt
+                source_table_create_stmt
                     .get_columns()
                     .into_iter()
                     .find(|column: &&ColumnDef| column.get_column_name().eq(name))
@@ -136,21 +140,37 @@ fn parse_table_fk(
         .map(|column_info: Column| column_info.get_rs_type())
         .collect();
 
-    let optional_relation = column_types
+    let destination_table_name = fk.get_ref_table().unwrap().to_upper_camel_case();
+    let destination_table_module = destination_table_name.to_snake_case();
+
+    let destination_table_create_stmt: &TableCreateStatement = table_create_stmt_map.get(&destination_table_module).unwrap();
+
+    let destination_column_types: Vec<_> = fk
+        .get_ref_columns()
         .iter()
-        .any(|column_type: &TokenStream| column_type.to_string().starts_with("Option"));
+        .map(|name| {
+            Column::from(
+                destination_table_create_stmt
+                    .get_columns()
+                    .into_iter()
+                    .find(|column: &&ColumnDef| column.get_column_name().eq(name))
+                    .unwrap(),
+            )
+        })
+        .map(|column_info: Column| column_info.get_rs_type())
+        .collect();
+
 
     ForeignKeyMeta {
-        source_columns: fk.get_columns(),
-        destination_columns: fk.get_ref_columns(),
-        column_types,
-
         source_table_name,
         source_table_module,
+        source_columns: fk.get_columns(),
+        source_column_types,
 
         destination_table_name,
         destination_table_module,
+        destination_columns: fk.get_ref_columns(),
+        destination_column_types,
 
-        optional_relation,
     }
 }

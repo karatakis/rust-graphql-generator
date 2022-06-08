@@ -40,6 +40,7 @@ async fn main() {
         pub mod graphql;
 
         pub use graphql::QueryRoot;
+        pub use graphql::OrmDataLoader;
     };
     fs::write(
         format!("{}/src/lib.rs", project_name),
@@ -51,13 +52,13 @@ async fn main() {
     let main_tokens = quote! {
         use async_graphql::{
             http::{playground_source, GraphQLPlaygroundConfig},
-            EmptyMutation, EmptySubscription, Schema,
+            EmptyMutation, EmptySubscription, Schema, dataloader::DataLoader
         };
         use async_graphql_poem::GraphQL;
         use poem::{get, handler, listener::TcpListener, web::Html, IntoResponse, Route, Server};
         use sea_orm::Database;
 
-        use #crate_name::QueryRoot;
+        use #crate_name::*;
 
         #[handler]
         async fn graphql_playground() -> impl IntoResponse {
@@ -72,11 +73,23 @@ async fn main() {
                 .init();
 
             let database = Database::connect("sqlite://../chinook.db").await.unwrap();
+
+            let orm_data_loader: DataLoader<OrmDataLoader> = DataLoader::new(
+                OrmDataLoader {
+                    db: database.clone()
+                },
+                tokio::spawn
+            ) ;
+
             let schema = Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
                 .data(database)
+                .data(orm_data_loader)
                 .finish();
+
             let app = Route::new().at("/", get(graphql_playground).post(GraphQL::new(schema)));
+
             println!("Playground: http://localhost:8000");
+
             Server::new(TcpListener::bind("0.0.0.0:8000"))
                 .run(app)
                 .await

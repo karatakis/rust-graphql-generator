@@ -1,6 +1,6 @@
 use crate::types::{ColumnMeta, ForeignKeyMeta, TableMeta};
-use heck::{ToSnakeCase};
-use proc_macro2::{Ident, TokenStream, Literal};
+use heck::ToSnakeCase;
+use proc_macro2::{Ident, Literal, TokenStream};
 use quote::{format_ident, quote};
 use std::collections::HashMap;
 
@@ -15,16 +15,17 @@ pub fn generate_graphql_entities(tables_meta: &Vec<TableMeta>) -> HashMap<String
             let filters: Vec<TokenStream> = generate_entity_filters(table);
             let getters: Vec<TokenStream> = generate_entity_getters(table);
             let relations: Vec<TokenStream> = generate_entity_relations(table);
-            // let foreign_keys: Vec<TokenStream> = generate_foreign_keys_and_loaders(table);
+            let foreign_keys: Vec<TokenStream> = generate_foreign_keys_and_loaders(table);
 
             let entity_tokens: TokenStream = quote! {
                 use async_graphql::Context;
                 use sea_orm::prelude::*;
+                use itertools::Itertools;
 
-                // TODO generic filter name Filter
-                // TODO dataloader
+                // TODO generate filter parser function
+
                 pub use crate::orm::#entity_module::*;
-                use crate::graphql::TypeFilter;
+                use crate::graphql::*;
 
                 #[async_graphql::Object(name=#entity_name)]
                 impl Model {
@@ -40,12 +41,7 @@ pub fn generate_graphql_entities(tables_meta: &Vec<TableMeta>) -> HashMap<String
                     #(#filters),*
                 }
 
-                // WIP
-                // struct Dataloader {
-                //     db: DatabaseConnection
-                // }
-
-                // #(#foreign_keys)*
+                #(#foreign_keys)*
             };
 
             (table.entity_module.clone(), entity_tokens)
@@ -87,7 +83,6 @@ pub fn generate_entity_getters(table: &TableMeta) -> Vec<TokenStream> {
         .collect()
 }
 
-// TODO refactor this
 pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
     table
         .foreign_keys
@@ -95,10 +90,14 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
         .map(|fk: &ForeignKeyMeta| {
             let reverse = fk.destination_table_name.eq(&table.entity_name);
 
-            let source_columns = if reverse { &fk.destination_columns } else { &fk.source_columns};
-            let destination_columns = if reverse { &fk.source_columns } else { &fk.destination_columns};
 
-            // TODO deduplicate code
+            let source_entity = if reverse { &fk.destination_table_name } else { &fk.source_table_name };
+            let destination_entity = if reverse { &fk.source_table_name } else { &fk.destination_table_name };
+
+            let fk_name = format_ident!("{}{}FK", source_entity, destination_entity);
+
+            let source_columns = if reverse { &fk.destination_columns } else { &fk.source_columns };
+
             let source_name = source_columns
                 .clone()
                 .into_iter()
@@ -117,12 +116,6 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
             let relation_name = format_ident!("{}_{}", source_name, destination_table_module);
             let destination_table_module = format_ident!("{}", destination_table_module);
 
-            // TODO support multiple keys
-            let dest_column = &destination_columns[0];
-            let dest_column = format_ident!("{}", dest_column);
-            let source_column = &source_columns[0];
-            let source_column = format_ident!("{}", source_column.to_snake_case());
-
             let return_type: TokenStream = if reverse {
                 quote! {
                     Vec<crate::orm::#destination_table_module::Model>
@@ -137,50 +130,42 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
                 }
             };
 
-            let data_query: TokenStream = if reverse {
+            // TODO add filter on relation
+            // filters: Option<entities::#table_filter>,
+
+            let key_items: Vec<Ident> = source_columns
+                .iter()
+                .map(|name: &String| {
+                    format_ident!("{}", name.to_snake_case())
+                })
+                .collect();
+
+            let return_value: TokenStream = if reverse {
                 quote! {
-                    let data: #return_type = crate::orm::#destination_table_module::Entity::find()
-                        .filter(filter)
-                        .all(db)
-                        .await
-                        .unwrap();
+                    data.unwrap_or(vec![])
                 }
             } else if fk.is_optional(reverse) {
                 quote! {
-                    let data: #return_type = crate::orm::#destination_table_module::Entity::find()
-                        .filter(filter)
-                        .one(db)
-                        .await
-                        .unwrap();
+                    data
                 }
             } else {
                 quote! {
-                    let data: #return_type = crate::orm::#destination_table_module::Entity::find()
-                        .filter(filter)
-                        .one(db)
-                        .await
-                        .unwrap()
-                        .unwrap();
+                    data.unwrap()
                 }
             };
-
-            // TODO custom realtion filter (with id removed)
-            // TODO add filters
-            // filters: Option<entities::#table_filter>,
 
             quote! {
                 pub async fn #relation_name<'a>(
                     &self,
                     ctx: &Context<'a>
                 ) -> #return_type {
-                    let db: &DatabaseConnection = ctx.data::<DatabaseConnection>().unwrap();
+                    let data_loader = ctx.data::<async_graphql::dataloader::DataLoader<OrmDataLoader>>().unwrap();
 
-                    let filter = sea_orm::Condition::all()
-                        .add(crate::orm::#destination_table_module::Column::#dest_column.eq(self.#source_column));
+                    let key = #fk_name(#(self.#key_items),*);
 
-                    #data_query
+                    let data: Option<_> = data_loader.load_one(key).await.unwrap();
 
-                    data
+                    #return_value
                 }
             }
         })
@@ -196,51 +181,76 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
 
             let field_indexes: Vec<Literal> = (0..fk.source_column_types.clone().len()).map(|n| Literal::usize_unsuffixed(n)).collect();
 
-            let column_names: Vec<Ident> = fk.destination_columns.iter().map(|name| format_ident!("{}", name)).collect();
-            let column_names_snake: Vec<Ident> = fk.destination_columns.iter().map(|name| format_ident!("{}", name.to_snake_case())).collect();
+            let source_entity = if reverse { &fk.destination_table_name } else { &fk.source_table_name };
+            // let source_table_module = if reverse { &fk.destination_table_module } else { &fk.source_table_module };
+            // let source_table_module = format_ident!("{}", source_table_module);
+            // let source_column_names = if reverse { &fk.destination_columns } else { &fk.source_columns };
+            // let source_column_names: Vec<Ident> = source_column_names.iter().map(|name| format_ident!("{}", name.to_snake_case())).collect();
 
-            let fk_name = format_ident!("{}{}FK", fk.source_table_name, fk.destination_table_name);
+            let destination_entity = if reverse { &fk.source_table_name } else { &fk.destination_table_name };
+            let destination_table_module = if reverse { &fk.source_table_module } else { &fk.destination_table_module };
+            let destination_table_module = format_ident!("{}", destination_table_module);
+            let destination_column_names = if reverse { &fk.source_columns } else { &fk.destination_columns };
+            let destination_columns: Vec<Ident> = destination_column_names.iter().map(|name| format_ident!("{}", name)).collect();
+            let destination_column_names: Vec<Ident> = destination_column_names.iter().map(|name| format_ident!("{}", name.to_snake_case())).collect();
 
-            let field_types = if reverse {&fk.destination_column_types} else {&fk.source_column_types};
+            let fk_name = format_ident!("{}{}FK", source_entity, destination_entity);
+
 
             let return_type: TokenStream = if reverse {
                 quote! {
-                    Vec<Model>
+                    Vec<crate::orm::#destination_table_module::Model>
                 }
             } else {
                 quote! {
-                    Model
+                    crate::orm::#destination_table_module::Model
                 }
             };
 
-            let return_result: TokenStream = if reverse {
-                quote! {
-                    let hashmap: std::collections::HashMap<#fk_name, #return_type> = std::collections::HashMap::new();
+            let source_field_types = if reverse { &fk.destination_column_types } else { &fk.source_column_types };
+            let destination_field_types = if reverse { &fk.source_column_types } else { &fk.destination_column_types };
 
-                    Ok(data.fold(
-                        hashmap,
-                        |mut acc: std::collections::HashMap<#fk_name, #return_type>, (key, model)| {
-                            if !acc.contains_key(&key) {
-                                acc.insert(key.clone(), Vec::new()).unwrap();
-                            }
-                            acc.get_mut(&key).unwrap().push(model);
-                            acc
+            let destination_fields: Vec<TokenStream> = destination_column_names
+                .iter()
+                .enumerate()
+                .map(|(index, name)|{
+                    let source_type = &destination_field_types[index];
+                    let destination_type = &source_field_types[index];
+                    let source_optional = source_type.to_string().starts_with("Option");
+                    let destination_optional = destination_type.to_string().starts_with("Option");
+
+                    if source_optional && !destination_optional {
+                        quote! {
+                            model.#name.unwrap()
                         }
-                    ))
+                    } else if !source_optional && destination_optional {
+                        quote! {
+                            Some(model.#name)
+                        }
+                    } else {
+                        quote! {
+                            model.#name
+                        }
+                    }
+                })
+                .collect();
+
+            let prepare_step = if reverse {
+                quote! {
+                    .into_group_map()
                 }
             } else {
-                quote! {
-                    Ok(data.collect())
+                quote!{
+                    .collect()
                 }
             };
 
             quote! {
-
-                #[derive(Clone, Eq, PartialEq, Hash)]
-                pub struct #fk_name(#(#field_types),*);
+                #[derive(Clone, Eq, PartialEq, Hash, Debug)]
+                pub struct #fk_name(#(#source_field_types),*);
 
                 #[async_trait::async_trait]
-                impl async_graphql::dataloader::Loader<#fk_name> for Dataloader {
+                impl async_graphql::dataloader::Loader<#fk_name> for OrmDataLoader {
                     type Value = #return_type;
                     type Error = std::sync::Arc<sea_orm::error::DbErr>;
 
@@ -250,7 +260,7 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
                                 sea_orm::sea_query::SimpleExpr::Binary(
                                     Box::new(
                                         sea_orm::sea_query::SimpleExpr::Tuple(vec![
-                                            #(sea_orm::sea_query::Expr::col(Column::#column_names.as_column_ref()).into_simple_expr()),*
+                                            #(sea_orm::sea_query::Expr::col(crate::orm::#destination_table_module::Column::#destination_columns.as_column_ref()).into_simple_expr()),*
                                         ])
                                     ),
                                     sea_orm::sea_query::BinOper::In,
@@ -267,18 +277,19 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
                                 )
                             );
 
-                        let data =  Entity::find()
-                            .filter(filter)
-                            .all(&self.db)
-                            .await?
-                            .into_iter()
-                            .map(|model| {
-                                let key = #fk_name(#(model.#column_names_snake),*);
+                        Ok(
+                            crate::orm::#destination_table_module::Entity::find()
+                                .filter(filter)
+                                .all(&self.db)
+                                .await?
+                                .into_iter()
+                                .map(|model| {
+                                    let key = #fk_name(#(#destination_fields),*);
 
-                                (key, model)
-                            });
-
-                        #return_result
+                                    (key, model)
+                                })
+                                #prepare_step
+                        )
                     }
                 }
             }

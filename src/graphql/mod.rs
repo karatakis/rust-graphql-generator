@@ -1,6 +1,7 @@
 pub mod entities;
 pub mod type_filter;
 pub mod root_node;
+pub mod orm_data_loader;
 
 use quote::{quote, format_ident};
 use crate::types::TableMeta;
@@ -51,6 +52,13 @@ pub fn write_root_node(dir: &String, tables_meta: &Vec<TableMeta>) {
     std::fs::write(dir.join("query_root.rs"), tokens.to_string()).unwrap();
 }
 
+pub fn write_orm_data_loader(dir: &String) {
+    let tokens = orm_data_loader::generate_orm_data_loader();
+
+    let dir = std::path::Path::new(dir);
+    std::fs::write(dir.join("orm_data_loader.rs"), tokens.to_string()).unwrap();
+}
+
 pub fn write_graphql(dir: &String, tables_meta: &Vec<TableMeta>) {
     write_entities(&format!("{}/entities", dir), tables_meta);
 
@@ -59,13 +67,16 @@ pub fn write_graphql(dir: &String, tables_meta: &Vec<TableMeta>) {
 
     write_root_node(dir, tables_meta);
 
+    write_orm_data_loader(dir);
+
     let mod_tokens = quote!{
-        pub mod type_filter;
         pub mod entities;
         pub mod query_root;
-
+        pub mod type_filter;
+        pub mod orm_data_loader;
         pub use query_root::QueryRoot;
         pub use type_filter::TypeFilter;
+        pub use orm_data_loader::OrmDataLoader;
     };
 
     std::fs::write(std::path::Path::new(dir).join("mod.rs"), mod_tokens.to_string()).unwrap();

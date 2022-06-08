@@ -88,6 +88,14 @@ impl TomlStructure {
             },
         );
 
+        dependencies.insert(
+            "itertools".into(),
+            DependencyInfo {
+                version: "0.10.3".into(),
+                features: None,
+            },
+        );
+
         Self {
             package,
             dependencies,

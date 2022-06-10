@@ -5,7 +5,7 @@ pub fn generate_type_filter() -> TokenStream {
     quote! {
         use sea_orm::prelude::*;
 
-        #[derive(async_graphql::InputObject, Debug)]
+        #[derive(async_graphql::InputObject, Debug, Clone, Eq, PartialEq)]
         #[graphql(concrete(name = "StringFilter", params(String)))]
         #[graphql(concrete(name = "TinyIntegerFilter", params(i8)))]
         #[graphql(concrete(name = "SmallIntegerFilter", params(i16)))]

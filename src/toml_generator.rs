@@ -96,6 +96,14 @@ impl TomlStructure {
             },
         );
 
+        dependencies.insert(
+            "derivative".into(),
+            DependencyInfo {
+                version: "2.2.0".into(),
+                features: None,
+            },
+        );
+
         Self {
             package,
             dependencies,

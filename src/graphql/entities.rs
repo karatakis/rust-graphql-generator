@@ -33,7 +33,18 @@ pub fn generate_graphql_entities(tables_meta: &Vec<TableMeta>) -> HashMap<String
                     #(#relations)*
                 }
 
-                #[derive(async_graphql::InputObject, Debug)]
+                // TODO export to common file
+                #[derive(derivative::Derivative, Clone, Eq)]
+                #[derivative(Hash, PartialEq, Debug)]
+                pub struct FkWithFilter<T, Y> {
+                    pub foreign_key: T,
+                    #[derivative(PartialEq="ignore")]
+                    #[derivative(Hash="ignore")]
+                    #[derivative(Debug="ignore")]
+                    pub filter: Option<Y>,
+                }
+
+                #[derive(async_graphql::InputObject, Debug, Eq, PartialEq, Clone)]
                 #[graphql(name=#entity_filter)]
                 pub struct Filter {
                     pub or: Option<Vec<Box<Filter>>>,
@@ -157,11 +168,15 @@ pub fn generate_entity_relations(table: &TableMeta) -> Vec<TokenStream> {
             quote! {
                 pub async fn #relation_name<'a>(
                     &self,
-                    ctx: &Context<'a>
+                    ctx: &Context<'a>,
+                    filter: Option<crate::graphql::entities::#destination_table_module::Filter>,
                 ) -> #return_type {
                     let data_loader = ctx.data::<async_graphql::dataloader::DataLoader<OrmDataLoader>>().unwrap();
 
-                    let key = #fk_name(#(self.#key_items),*);
+                    let key = FkWithFilter {
+                        foreign_key: #fk_name(#(self.#key_items),*),
+                        filter,
+                    };
 
                     let data: Option<_> = data_loader.load_one(key).await.unwrap();
 
@@ -250,11 +265,13 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
                 pub struct #fk_name(#(#source_field_types),*);
 
                 #[async_trait::async_trait]
-                impl async_graphql::dataloader::Loader<#fk_name> for OrmDataLoader {
+                impl async_graphql::dataloader::Loader<FkWithFilter<#fk_name, crate::graphql::entities::#destination_table_module::Filter>> for OrmDataLoader {
                     type Value = #return_type;
                     type Error = std::sync::Arc<sea_orm::error::DbErr>;
 
-                    async fn load(&self, keys: &[#fk_name]) -> Result<std::collections::HashMap<#fk_name, Self::Value>, Self::Error> {
+                    async fn load(&self, keys: &[FkWithFilter<#fk_name, crate::graphql::entities::#destination_table_module::Filter>]) -> Result<std::collections::HashMap<FkWithFilter<#fk_name, crate::graphql::entities::#destination_table_module::Filter>, Self::Value>, Self::Error> {
+                        let external_filter: Option<crate::graphql::entities::#destination_table_module::Filter> = keys[0].clone().filter;
+
                         let filter = sea_orm::Condition::all()
                             .add(
                                 sea_orm::sea_query::SimpleExpr::Binary(
@@ -268,8 +285,8 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
                                         sea_orm::sea_query::SimpleExpr::Tuple(
                                             keys
                                                 .iter()
-                                                .map(|tuple|
-                                                    sea_orm::sea_query::SimpleExpr::Values(vec![#(tuple.#field_indexes.into()),*])
+                                                .map(|key: &FkWithFilter<#fk_name, crate::graphql::entities::#destination_table_module::Filter>|
+                                                    sea_orm::sea_query::SimpleExpr::Values(vec![#(key.foreign_key.#field_indexes.into()),*])
                                                 )
                                                 .collect()
                                         )
@@ -284,7 +301,10 @@ pub fn generate_foreign_keys_and_loaders(table: &TableMeta) -> Vec<TokenStream> 
                                 .await?
                                 .into_iter()
                                 .map(|model| {
-                                    let key = #fk_name(#(#destination_fields),*);
+                                    let key = FkWithFilter {
+                                        foreign_key: #fk_name(#(#destination_fields),*),
+                                        filter: None,
+                                    };
 
                                     (key, model)
                                 })

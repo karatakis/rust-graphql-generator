@@ -74,6 +74,7 @@ async fn main() {
 
             let database = Database::connect("sqlite://../chinook.db").await.unwrap();
 
+            // TODO use environment variables to configure dataloader batch size
             let orm_data_loader: DataLoader<OrmDataLoader> = DataLoader::new(
                 OrmDataLoader {
                     db: database.clone()
